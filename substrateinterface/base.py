@@ -2220,10 +2220,7 @@ class SubstrateInterface:
                             header_only: bool = False, finalized_only: bool = False,
                             subscription_handler: callable = None):
 
-        try:
-            self.init_runtime(block_hash=block_hash)
-        except BlockNotFound:
-            return None
+        self.init_runtime(block_hash=block_hash)
 
         def decode_block(block_data, block_data_hash=None):
 
