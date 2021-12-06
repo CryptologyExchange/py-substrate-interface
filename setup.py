@@ -41,7 +41,7 @@ elif environ.get('GITHUB_REF'):
 
     version = environ['GITHUB_REF'].replace('refs/tags/v', '')
 else:
-    version = '1.2.2'
+    version = '1.2.2-1'
 
 here = path.abspath(path.dirname(__file__))
 
