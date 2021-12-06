@@ -16,7 +16,7 @@ management and versioning of types.
 
 * [Documentation](#documentation)
 * [Installation](#installation)
-* [Initialization](#hello-world--the-flipper)
+* [Initialization](#initialization)
   * [Autodiscover mode](#autodiscover-mode)
   * [Manually set required properties](#manually-set-required-properties)  
   * [Substrate Node Template](#substrate-node-template)
@@ -32,6 +32,7 @@ management and versioning of types.
   * [Create mortal extrinsics](#create-mortal-extrinsics)
   * [Keypair creation and signing](#keypair-creation-and-signing)
   * [Creating keypairs with soft and hard key derivation paths](#creating-keypairs-with-soft-and-hard-key-derivation-paths)
+  * [Creating ECDSA keypairs with BIP44 derivation paths](#creating-ecdsa-keypairs-with-bip44-derivation-paths)
   * [Getting estimate of network fees for extrinsic in advance](#getting-estimate-of-network-fees-for-extrinsic-in-advance)
   * [Offline signing of extrinsics](#offline-signing-of-extrinsics)
   * [Accessing runtime constants](#accessing-runtime-constants)
@@ -64,7 +65,7 @@ When only an `url` is provided, it tries to determine certain properties like `s
 `type_registry_preset` automatically by calling the RPC method `system_properties`. 
 
 At the moment this will work for Polkadot, Kusama, Kulupu and Westend nodes, for other chains the `ss58_format` 
-(default 42) and  `type_registry` (defaults to latest vanilla Substrate types) should be set manually. 
+(default 42) and  `type_registry` (defaults to the latest vanilla Substrate types) should be set manually. 
 
 ### Manually set required properties
 
@@ -155,7 +156,9 @@ substrate = SubstrateInterface(
 
 ## Features
 
-### Retrieve extrinsics for a certain block (Method 1: access serialized value)
+### Retrieve extrinsics for a certain block 
+
+#### Method 1: access serialized value
 
 ```python
 # Set block_hash to None for chaintip
@@ -186,7 +189,7 @@ for extrinsic in result['extrinsics']:
         print("Param '{}': {}".format(param['name'], param['value']))
 ```
 
-### Retrieve extrinsics for a certain block (Method 2: access nested objects)
+#### Method 2: access nested objects
 
 ```python
 # Set block_hash to None for chaintip
@@ -286,7 +289,7 @@ To access these nested structures you can access those formally using:
 
 As a convenient shorthand you can also use:
 
-`account_info['data']['free']`
+`account_info['data']['free']
 
 `ScaleType` objects can also be automatically converted to an iterable, so if the object
 is for example the `others` in the result Struct of `Staking.eraStakers` can be iterated via:
@@ -297,7 +300,7 @@ for other_info in era_stakers['others']:
 ```
 
 #### Serializable
-Each `ScaleType` holds a complete serialized version of itself in the `account_info.serialize()` property, so it can easily stored or used to create JSON strings.
+Each `ScaleType` holds a complete serialized version of itself in the `account_info.serialize()` property, so it can easily store or used to create JSON strings.
 
 So the whole result of `account_info.serialize()` will be a `dict` containing the following:
 
@@ -318,7 +321,13 @@ So the whole result of `account_info.serialize()` will be a `dict` containing th
 
 #### Comparing values with `ScaleType` objects
 
-[TODO]
+It is possible to compare ScaleType objects directly to Python primitives, internally the serialized `value` attribute
+is compared:
+
+```python
+metadata_obj[1][1]['extrinsic']['version'] # '<U8(value=4)>'
+metadata_obj[1][1]['extrinsic']['version'] == 4 # True
+```
 
 ### Storage subscriptions
 
@@ -361,7 +370,7 @@ for account, account_info in result:
     print(f"Free balance of account '{account.value}': {account_info.value['data']['free']}")
 ```
 
-These results are transparantly retrieved in batches capped by the `page_size` kwarg, currently the 
+These results are transparently retrieved in batches capped by the `page_size` kwarg, currently the 
 maximum `page_size` restricted by the RPC node is 1000    
 
 ```python
@@ -554,10 +563,10 @@ if keypair.verify("Test123", signature):
     print('Verified')
 ```
 
-By default, a keypair is using SR25519 cryptography, alternatively ED25519 can be explictly specified:
+By default, a keypair is using SR25519 cryptography, alternatively ED25519 and ECDSA can be explicitly specified:
 
 ```python
-keypair = Keypair.create_from_mnemonic(mnemonic, crypto_type=KeypairType.ED25519)
+keypair = Keypair.create_from_mnemonic(mnemonic, crypto_type=KeypairType.ECDSA)
 ```
 
 ### Creating keypairs with soft and hard key derivation paths
@@ -572,6 +581,14 @@ By omitting the mnemonic the default development mnemonic is used:
 ```python
 keypair = Keypair.create_from_uri('//Alice')
 ```
+
+### Creating ECDSA keypairs with BIP44 derivation paths 
+
+```python
+mnemonic = Keypair.generate_mnemonic()
+keypair = Keypair.create_from_uri(f"{mnemonic}/m/44'/60'/0'/0/0", crypto_type=KeypairType.ECDSA)
+```
+
 
 ### Getting estimate of network fees for extrinsic in advance
 
@@ -672,7 +689,9 @@ with SubstrateInterface(url="wss://rpc.polkadot.io") as substrate:
 
 ## Keeping type registry presets up to date
 
-When on-chain runtime upgrades occur, types used in call- or storage functions can be added or modified. Therefor it is
+_Note: Only applicable for chains with metadata < V14_
+
+When on-chain runtime upgrades occur, types used in call- or storage functions can be added or modified. Therefore it is
 important to keep the type registry presets up to date, otherwise this can lead to decoding errors like 
 `RemainingScaleBytesNotEmptyException`. 
 

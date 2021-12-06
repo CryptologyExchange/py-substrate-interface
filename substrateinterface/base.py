@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import warnings
-from functools import lru_cache
 from hashlib import blake2b
 
 import binascii
@@ -35,7 +34,6 @@ from scalecodec.type_registry import load_type_registry_preset
 from scalecodec.updater import update_type_registries
 
 from .key import extract_derive_path
-from .utils.caching import block_dependent_lru_cache
 from .utils.ecdsa_helpers import mnemonic_to_ecdsa_private_key, ecdsa_verify
 from .utils.hasher import blake2_256, two_x64_concat, xxh128, blake2_128, blake2_128_concat, identity
 from .exceptions import SubstrateRequestException, ConfigurationError, StorageFunctionNotFound, BlockNotFound, \
@@ -763,7 +761,6 @@ class SubstrateInterface:
 
             return result
 
-    @lru_cache(maxsize=1000)
     def get_block_hash(self, block_id: int) -> str:
         """
         A pass-though to existing JSONRPC method `chain_getBlockHash`
@@ -783,7 +780,6 @@ class SubstrateInterface:
         else:
             return response.get('result')
 
-    @block_dependent_lru_cache(maxsize=1000, block_arg_index=1)
     def get_block_number(self, block_hash: str) -> int:
         """
         A convenience method to get the block number for given block_hash
@@ -806,7 +802,6 @@ class SubstrateInterface:
             if response['result']:
                 return int(response['result']['number'], 16)
 
-    @block_dependent_lru_cache(maxsize=10)
     def get_block_metadata(self, block_hash=None, decode=True):
         """
         A pass-though to existing JSONRPC method `state_getMetadata`.
@@ -1409,6 +1404,40 @@ class SubstrateInterface:
 
         return response
 
+    def create_scale_object(self, type_string: str, data=None, block_hash=None, **kwargs) -> 'ScaleType':
+        """
+        Convenience method to create a SCALE object of type `type_string`, this will initialize the runtime
+        automatically at moment of `block_hash`, or chain tip if omitted.
+
+        :param type_string:
+        :param data:
+        :param block_hash: Optional block hash for moment of decoding, when omitted the chain tip will be used
+        :param kwargs:
+        :return: ScaleType
+        """
+        self.init_runtime(block_hash=block_hash)
+
+        if 'metadata' not in kwargs:
+            kwargs['metadata'] = self.metadata_decoder
+
+        return self.runtime_config.create_scale_object(type_string, data=data, **kwargs)
+
+    def create_scale_object(self, type_string: str, data=None, block_hash=None, **kwargs) -> 'ScaleType':
+        """
+        Create a SCALE object of type `type_string`
+        :param type_string:
+        :param data:
+        :param block_hash: Optional block hash for moment of decoding, when omitted the chain tip will be used
+        :param kwargs:
+        :return: ScaleType
+        """
+        self.init_runtime(block_hash=block_hash)
+
+        if 'metadata' not in kwargs:
+            kwargs['metadata'] = self.metadata_decoder
+
+        return self.runtime_config.create_scale_object(type_string, data=data, **kwargs)
+
     def compose_call(self, call_module: str, call_function: str, call_params: dict = None, block_hash: str = None):
         """
         Composes a call payload which can be used as an unsigned extrinsic or a proposal.
@@ -1481,6 +1510,60 @@ class SubstrateInterface:
         # Create signature payload
         signature_payload = self.runtime_config.create_scale_object('ExtrinsicPayloadValue')
 
+        # Process signed extensions in metadata
+        if 'signed_extensions' in self.metadata_decoder[1][1]['extrinsic']:
+
+            # Base signature payload
+            signature_payload.type_mapping = [['call', 'CallBytes']]
+
+            # Add signed extensions to payload
+            signed_extensions = self.metadata_decoder.get_signed_extensions()
+
+            if 'CheckMortality' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['era', signed_extensions['CheckMortality']['extrinsic']]
+                )
+
+            if 'CheckEra' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['era', signed_extensions['CheckEra']['extrinsic']]
+                )
+
+            if 'CheckNonce' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['nonce', signed_extensions['CheckNonce']['extrinsic']]
+                )
+
+            if 'ChargeTransactionPayment' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['tip', signed_extensions['ChargeTransactionPayment']['extrinsic']]
+                )
+
+            if 'CheckSpecVersion' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['spec_version', signed_extensions['CheckSpecVersion']['additional_signed']]
+                )
+
+            if 'CheckTxVersion' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['transaction_version', signed_extensions['CheckTxVersion']['additional_signed']]
+                )
+
+            if 'CheckGenesis' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['genesis_hash', signed_extensions['CheckGenesis']['additional_signed']]
+                )
+
+            if 'CheckMortality' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['block_hash', signed_extensions['CheckMortality']['additional_signed']]
+                )
+
+            if 'CheckEra' in signed_extensions:
+                signature_payload.type_mapping.append(
+                    ['block_hash', signed_extensions['CheckEra']['additional_signed']]
+                )
+
         if include_call_length:
 
             length_obj = self.runtime_config.get_decoder_class('Bytes')
@@ -1496,11 +1579,9 @@ class SubstrateInterface:
             'tip': tip,
             'spec_version': self.runtime_version,
             'genesis_hash': genesis_hash,
-            'block_hash': block_hash
+            'block_hash': block_hash,
+            'transaction_version': self.transaction_version
         }
-
-        if self.transaction_version is not None:
-            payload_dict['transaction_version'] = self.transaction_version
 
         signature_payload.encode(payload_dict)
 
@@ -1528,9 +1609,17 @@ class SubstrateInterface:
         GenericExtrinsic The signed Extrinsic
         """
 
+        self.init_runtime()
+
         # Check requirements
         if not isinstance(call, GenericCall):
             raise TypeError("'call' must be of type Call")
+
+        # Check if extrinsic version is supported
+        if self.metadata_decoder[1][1]['extrinsic']['version'] != 4:
+            raise NotImplementedError(
+                f"Extrinsic version {self.metadata_decoder[1][1]['extrinsic']['version']} not supported"
+            )
 
         # Retrieve nonce
         if nonce is None:
@@ -1600,6 +1689,9 @@ class SubstrateInterface:
         -------
         GenericExtrinsic
         """
+
+        self.init_runtime()
+
         # Create extrinsic
         extrinsic = self.runtime_config.create_scale_object(type_string='Extrinsic', metadata=self.metadata_decoder)
 
@@ -2093,7 +2185,6 @@ class SubstrateInterface:
                     if constant_name == constant.value['name']:
                         return constant
 
-    @lru_cache(maxsize=1000)
     def get_constant(self, module_name, constant_name, block_hash=None) -> Optional[ScaleType]:
         """
         Returns the decoded `ScaleType` object of the constant for given module name, call function name and block_hash
@@ -2215,7 +2306,6 @@ class SubstrateInterface:
                     if error_name == error.name:
                         return error
 
-    @block_dependent_lru_cache(maxsize=1000)
     def __get_block_handler(self, block_hash: str, ignore_decoding_errors: bool = False, include_author: bool = False,
                             header_only: bool = False, finalized_only: bool = False,
                             subscription_handler: callable = None):
